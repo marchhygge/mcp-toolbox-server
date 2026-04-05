@@ -1,0 +1,23 @@
+tools:
+  get_orders_by_date:
+    kind: postgres-sql
+    source: olist-db
+    description: Get orders filtered by purchase date range.
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD)
+    statement: |
+      SELECT
+        order_id,
+        customer_id,
+        order_status,
+        order_purchase_timestamp
+      FROM public.orders
+      WHERE date(order_purchase_timestamp) >= $1::date
+        AND date(order_purchase_timestamp) <  $2::date
+      ORDER BY order_purchase_timestamp DESC
+      LIMIT 100;

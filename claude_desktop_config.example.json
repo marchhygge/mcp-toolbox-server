@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "toolbox-default": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:5000/mcp", "--allow-http"]
+    },
+    "toolbox-admin": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:5000/mcp/admin", "--allow-http"]
+    }
+  }
+}

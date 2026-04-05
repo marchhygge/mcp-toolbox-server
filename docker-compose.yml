@@ -1,0 +1,25 @@
+services:
+  toolbox:
+    image: us-central1-docker.pkg.dev/database-toolbox/toolbox/toolbox:latest
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./tools:/tools:ro
+    env_file:
+      - ./tools/.env
+    command:
+      - --config-folder=/tools
+      - --address=0.0.0.0
+      - --enable-api
+      - --ui
+      - --poll-interval=3
+  bridge:
+    build: ./bridge
+    ports:
+      - "8000:8000"
+    environment:
+      TOOLBOX_URL: http://toolbox:5000
+      TOOLSET: default
+      PORT: 8000
+    depends_on:
+      - toolbox
