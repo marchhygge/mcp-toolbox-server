@@ -3,3 +3,11 @@ toolsets:
     - get_orders_by_date
   admin:
     - get_orders_by_date
+  omt:
+    - omt_get_revenue_summary
+    - omt_get_order_status_breakdown
+    - omt_get_top_sellers
+    - omt_get_top_categories
+    - omt_get_customer_satisfaction
+    - omt_get_delivery_performance
+    - omt_get_payment_methods
