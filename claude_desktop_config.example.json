@@ -5,7 +5,7 @@
       "args": [
         "-y", 
         "mcp-remote", 
-        "http://localhost:5000/mcp", 
+        "http://<EC2_PUBLIC_IP>:5000/mcp",
         "--allow-http"
       ]
     },
@@ -14,7 +14,7 @@
       "args": [
         "-y", 
         "mcp-remote", 
-        "http://localhost:5000/mcp/admin", 
+        "http://<EC2_PUBLIC_IP>:5000/mcp/admin",
         "--allow-http"
       ]
     }
