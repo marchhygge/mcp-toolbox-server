@@ -19,4 +19,4 @@ jobs:
           script: |
             cd ${{ secrets.EC2_REPO_PATH }}
             git pull origin main
-            docker compose up -d --pull always
+            sudo docker compose up -d --pull always
