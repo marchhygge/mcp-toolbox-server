@@ -1,6 +1,7 @@
 toolsets:
   default:
     - get_orders_by_date
+    - omt_get_revenue_summary
 
 # OMT (Olist Marketplace Team)
   omt:
