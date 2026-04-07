@@ -1,8 +1,8 @@
 toolsets:
   default:
     - get_orders_by_date
-  admin:
-    - get_orders_by_date
+
+# OMT (Olist Marketplace Team)
   omt:
     - omt_get_revenue_summary
     - omt_get_order_status_breakdown
@@ -11,3 +11,11 @@ toolsets:
     - omt_get_customer_satisfaction
     - omt_get_delivery_performance
     - omt_get_payment_methods
+
+# Department Admin Toolset
+  admin:
+    - admin_get_user_summary
+    - admin_get_ticket_performance
+    - admin_get_staff_ticket_workload
+    - admin_get_dashboard_usage_summary
+    - admin_get_system_activity_summary
