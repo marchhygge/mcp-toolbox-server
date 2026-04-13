@@ -323,13 +323,24 @@ tools:
               'Content-Type',  'text/html; charset=utf-8'
             ),
             convert_to($2, 'UTF8'),
-            5000
+            10000
           FROM svc_key
           RETURNING id
+        ),
+        response AS (
+          SELECT * FROM net.http_collect_response(
+            (SELECT id FROM upload),
+            async := false
+          )
         )
       SELECT
-        id      AS request_id,
+        (SELECT id FROM upload)                 AS request_id,
+        r.status_code                           AS http_status,
+        CASE
+          WHEN r.status_code BETWEEN 200 AND 299 THEN 'ok'
+          ELSE 'error: ' || left(r.body, 300)
+        END                                     AS upload_status,
         'https://nfijbjnazggdnogufwmi.supabase.co/storage/v1/object/public/dashboard/'
-          || $1 AS public_url,
-        $1      AS filename
-      FROM upload;
+          || $1                                 AS public_url,
+        $1                                      AS filename
+      FROM response r;
