@@ -1,0 +1,335 @@
+tools:
+
+  # ── Dimension Tables ────────────────────────────────────────────────────────
+
+  bi_get_dim_product:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get all products from the product dimension table.
+      Returns product ID, category name (Portuguese), and physical dimensions.
+      Use this to enrich order item data with product/category context.
+      No parameters required — returns the full product catalog.
+      Output fields:
+        - product_id: unique product identifier
+        - category_name: product category in Portuguese (e.g. cama_mesa_banho, esporte_lazer)
+        - weight_g: product weight in grams
+        - length_cm, height_cm, width_cm: physical dimensions in centimeters
+    statement: |
+      SELECT
+        product_id,
+        category_name,
+        weight_g,
+        length_cm,
+        height_cm,
+        width_cm
+      FROM centralize.dim_product
+      ORDER BY category_name NULLS LAST;
+
+  bi_get_dim_user:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get users (customers or sellers) from the user dimension table filtered by type.
+      Use this for geographic analysis — city/state distribution of customers or sellers.
+      Output fields:
+        - user_type: 'customer' or 'seller'
+        - user_id: internal system identifier
+        - user_unique_id: unique customer/seller key used across transactions
+        - city: city name (Brazilian Portuguese)
+        - state: Brazilian state code (e.g. SP, RJ, MG)
+    parameters:
+      - name: user_type
+        type: string
+        description: "Filter by user type: 'customer' or 'seller'"
+    statement: |
+      SELECT
+        user_type,
+        user_id,
+        user_unique_id,
+        city,
+        state
+      FROM centralize.dim_user
+      WHERE user_type = $1
+      ORDER BY state, city;
+
+  bi_get_dim_order_review:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get raw order review comments for a date range.
+      Returns individual review texts — useful for sentiment analysis or qualitative insights.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - review_id: unique review identifier
+        - order_id: associated order
+        - review_comment_title: short title written by the customer
+        - review_comment_message: full review body text
+        - review_creation_date: when the customer submitted the review
+        - review_answer_timestamp: when Olist responded to the review
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD)
+    statement: |
+      SELECT
+        review_id,
+        order_id,
+        review_comment_title,
+        review_comment_message,
+        review_creation_date,
+        review_answer_timestamp
+      FROM centralize.dim_order_review
+      WHERE DATE(review_creation_date) >= $1::date
+        AND DATE(review_creation_date) <  $2::date
+      ORDER BY review_creation_date DESC
+      LIMIT 1000;
+
+  # ── Fact Tables ─────────────────────────────────────────────────────────────
+
+  bi_get_fact_order:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get order-level facts for a date range (max 1 year).
+      Each row is one order with its full lifecycle timestamps and financial totals.
+      Primary table for order volume, revenue, and delivery time analysis.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - order_id, customer_id
+        - order_date: date of purchase
+        - order_status: delivered | shipped | processing | canceled | invoiced | approved | unavailable
+        - order_purchase_timestamp: exact purchase datetime
+        - order_approved_at: payment approval datetime
+        - order_delivered_carrier_date: handoff to carrier datetime
+        - order_delivered_customer_date: actual delivery to customer datetime
+        - order_estimated_delivery_date: estimated delivery promised at purchase
+        - total_payment: total amount paid by customer (including freight)
+        - total_items: number of items in the order
+        - total_price: sum of product prices (excluding freight)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        order_id,
+        customer_id,
+        order_date,
+        order_status,
+        order_purchase_timestamp,
+        order_approved_at,
+        order_delivered_carrier_date,
+        order_delivered_customer_date,
+        order_estimated_delivery_date,
+        total_payment,
+        total_items,
+        total_price
+      FROM centralize.fact_order
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      ORDER BY order_date DESC
+      LIMIT 5000;
+
+  bi_get_fact_order_item:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get order item-level facts for a date range (max 1 year).
+      Each row is one item within an order, linked to seller and product.
+      Use for seller performance, product category revenue, and freight analysis.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - order_id, order_item_id: item position within the order (1, 2, ...)
+        - product_id: join with bi_get_dim_product for category info
+        - seller_id: join with bi_get_dim_user (user_type='seller') for location info
+        - order_date
+        - total_price: product price for this item (excluding freight)
+        - total_freight_value: freight/shipping cost for this item
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        order_id,
+        order_item_id,
+        product_id,
+        seller_id,
+        order_date,
+        total_price,
+        total_freight_value
+      FROM centralize.fact_order_item
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      ORDER BY order_date DESC
+      LIMIT 5000;
+
+  bi_get_fact_order_operation:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get simplified operational order facts for a date range (max 1 year).
+      Lightweight view of orders focused on status and value — no delivery timestamps.
+      Use for quick operational reporting and status distribution analysis.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - order_id, customer_id
+        - order_date
+        - order_status: delivered | shipped | processing | canceled | invoiced | approved | unavailable
+        - total_payment: total collected from customer
+        - total_items: item count
+        - total_price: product price total (excluding freight)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        order_id,
+        customer_id,
+        order_date,
+        order_status,
+        total_payment,
+        total_items,
+        total_price
+      FROM centralize.fact_order_operation
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      ORDER BY order_date DESC
+      LIMIT 5000;
+
+  bi_get_fact_order_review:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get aggregated order review scores for a date range (max 1 year).
+      Each row is one order's review summary with average score and total review count.
+      Use for customer satisfaction trend analysis over time.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - order_id
+        - order_date: date the order was placed
+        - last_review_date: most recent review submission timestamp
+        - avg_score: average review score for this order (1.0 – 5.0)
+        - total_reviews: number of reviews submitted for this order
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        order_id,
+        order_date,
+        last_review_date,
+        avg_score,
+        total_reviews
+      FROM centralize.fact_order_review
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      ORDER BY order_date DESC
+      LIMIT 5000;
+
+  bi_get_fact_payment:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get payment transaction details for a date range (max 1 year).
+      Each row is one payment entry — an order may have multiple rows if payments are split.
+      Use for payment method distribution, installment analysis, and revenue collection.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - order_id
+        - payment_sequential: sequence number within the order (1 = primary payment)
+        - payment_type: credit_card | boleto | voucher | debit_card
+        - payment_installments: installment count (meaningful for credit_card; 1 for others)
+        - order_date
+        - total_payment_value: monetary amount for this payment entry in BRL
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        order_id,
+        payment_sequential,
+        payment_type,
+        payment_installments,
+        order_date,
+        total_payment_value
+      FROM centralize.fact_payment
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      ORDER BY order_date DESC
+      LIMIT 5000;
+
+  # ── Storage Upload ──────────────────────────────────────────────────────────
+
+  bi_upload_dashboard:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Upload an HTML dashboard file to the Supabase 'dashboard' storage bucket.
+      Call this after generating a complete HTML dashboard to persist and share it.
+      The bucket is public — the returned public_url is directly accessible in any browser.
+      Naming convention for filename: {dept}_{topic}_{YYYY-MM-DD}.html
+        e.g. bi_revenue_overview_2024-01-01.html
+      If a file with the same filename already exists, it will be overwritten (upsert).
+      Output fields:
+        - request_id: pg_net async request ID
+        - public_url: direct browser URL to view the uploaded dashboard
+        - filename: confirmed stored filename
+    parameters:
+      - name: filename
+        type: string
+        description: "Filename for the dashboard, e.g. bi_revenue_2024-01.html"
+      - name: html_content
+        type: string
+        description: Full HTML string of the dashboard to upload
+    statement: |
+      WITH
+        svc_key AS (
+          SELECT value AS key
+          FROM app_config.secrets
+          WHERE key = 'supabase_service_role_key'
+        ),
+        upload AS (
+          INSERT INTO net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+          SELECT
+            'POST',
+            'https://nfijbjnazggdnogufwmi.supabase.co/storage/v1/object/dashboard/'
+              || $1
+              || '?upsert=true',
+            jsonb_build_object(
+              'Authorization', 'Bearer ' || key,
+              'Content-Type',  'text/html; charset=utf-8'
+            ),
+            convert_to($2, 'UTF8'),
+            5000
+          FROM svc_key
+          RETURNING id
+        )
+      SELECT
+        id      AS request_id,
+        'https://nfijbjnazggdnogufwmi.supabase.co/storage/v1/object/public/dashboard/'
+          || $1 AS public_url,
+        $1      AS filename
+      FROM upload;

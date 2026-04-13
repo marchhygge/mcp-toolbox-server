@@ -7,10 +7,10 @@ sources:
     user: ${DB_USER}
     password: ${DB_PASSWORD}
 
-  ftask-db:
-    kind: mysql
-    host: ${MYSQL_HOST}
-    port: ${MYSQL_PORT}
-    database: ${MYSQL_DB_NAME}
-    user: ${MYSQL_USER}
-    password: ${MYSQL_PASSWORD}
+  # ftask-db:
+  #   kind: mysql
+  #   host: ${MYSQL_HOST}
+  #   port: ${MYSQL_PORT}
+  #   database: ${MYSQL_DB_NAME}
+  #   user: ${MYSQL_USER}
+  #   password: ${MYSQL_PASSWORD}
