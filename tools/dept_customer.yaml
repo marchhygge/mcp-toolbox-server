@@ -1,0 +1,189 @@
+tools:
+
+  cust_get_satisfaction_summary:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get overall customer satisfaction metrics for a date range (max 1 year).
+      Based on post-delivery review scores submitted by customers.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - overall_avg_score: weighted average review score (1–5, where 5 = most satisfied)
+        - total_reviews: total number of reviews submitted
+        - score_5: orders with perfect 5-star rating
+        - score_4: orders rated 4 stars
+        - score_3: orders rated 3 stars (neutral)
+        - score_2: orders rated 2 stars (dissatisfied)
+        - score_1: orders rated 1 star (very dissatisfied)
+        - nps_promoters_pct: % of reviews with score 5 (promoters proxy)
+        - nps_detractors_pct: % of reviews with score <= 2 (detractors proxy)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        ROUND(AVG(avg_score)::numeric, 2)                                              AS overall_avg_score,
+        SUM(total_reviews)                                                             AS total_reviews,
+        SUM(CASE WHEN avg_score = 5                    THEN total_reviews ELSE 0 END)  AS score_5,
+        SUM(CASE WHEN avg_score >= 4 AND avg_score < 5 THEN total_reviews ELSE 0 END)  AS score_4,
+        SUM(CASE WHEN avg_score >= 3 AND avg_score < 4 THEN total_reviews ELSE 0 END)  AS score_3,
+        SUM(CASE WHEN avg_score >= 2 AND avg_score < 3 THEN total_reviews ELSE 0 END)  AS score_2,
+        SUM(CASE WHEN avg_score < 2                    THEN total_reviews ELSE 0 END)  AS score_1,
+        ROUND(SUM(CASE WHEN avg_score = 5  THEN total_reviews ELSE 0 END) * 100.0 / NULLIF(SUM(total_reviews), 0), 2) AS nps_promoters_pct,
+        ROUND(SUM(CASE WHEN avg_score <= 2 THEN total_reviews ELSE 0 END) * 100.0 / NULLIF(SUM(total_reviews), 0), 2) AS nps_detractors_pct
+      FROM centralize.fact_order_review
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'));
+
+  cust_get_review_trend:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get monthly customer satisfaction trend for a date range (max 1 year).
+      Use to identify satisfaction improvements or deteriorations over time.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - year_month: period in YYYY-MM format
+        - total_reviews: number of reviews in this month
+        - avg_score: average review score for the month (1.0 – 5.0)
+        - low_score_count: number of reviews with score <= 2 (negative feedback)
+        - low_score_pct: percentage of reviews with score <= 2
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        TO_CHAR(order_date, 'YYYY-MM')                                                  AS year_month,
+        SUM(total_reviews)                                                              AS total_reviews,
+        ROUND(AVG(avg_score)::numeric, 2)                                               AS avg_score,
+        SUM(CASE WHEN avg_score <= 2 THEN total_reviews ELSE 0 END)                     AS low_score_count,
+        ROUND(SUM(CASE WHEN avg_score <= 2 THEN total_reviews ELSE 0 END) * 100.0
+              / NULLIF(SUM(total_reviews), 0), 2)                                       AS low_score_pct
+      FROM centralize.fact_order_review
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      GROUP BY TO_CHAR(order_date, 'YYYY-MM')
+      ORDER BY year_month;
+
+  cust_get_negative_reviews:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get raw review comments for low-scoring orders (score <= 2) in a date range.
+      Use for qualitative analysis of customer complaints and issue identification.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - order_id: associated order
+        - avg_score: review score for the order (1.0 – 2.0)
+        - review_comment_title: short title written by the customer
+        - review_comment_message: full complaint text
+        - review_creation_date: when the review was submitted
+        - review_answer_timestamp: when Olist responded (NULL if unanswered)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        r.order_id,
+        fr.avg_score,
+        r.review_comment_title,
+        r.review_comment_message,
+        r.review_creation_date,
+        r.review_answer_timestamp
+      FROM centralize.dim_order_review r
+      JOIN centralize.fact_order_review fr ON r.order_id = fr.order_id
+      WHERE fr.avg_score <= 2
+        AND fr.order_date >= $1::date
+        AND fr.order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      ORDER BY fr.avg_score ASC, r.review_creation_date DESC
+      LIMIT 500;
+
+  cust_get_customer_geographic_distribution:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get customer count distribution by Brazilian state.
+      Use to understand the customer base geographic spread and identify underserved regions.
+      No parameters required — returns the full customer geographic breakdown.
+      Output fields:
+        - state: Brazilian state code (e.g. SP, RJ, MG)
+        - total_customers: number of unique customers registered in this state
+        - top_city: city with the highest customer count in this state
+        - pct_of_total: share of all customers in this state (%)
+    statement: |
+      WITH state_counts AS (
+        SELECT
+          state,
+          COUNT(*)  AS total_customers
+        FROM centralize.dim_user
+        WHERE user_type = 'customer'
+        GROUP BY state
+      ),
+      top_cities AS (
+        SELECT DISTINCT ON (state)
+          state,
+          city AS top_city,
+          COUNT(*) OVER (PARTITION BY state, city) AS city_count
+        FROM centralize.dim_user
+        WHERE user_type = 'customer'
+        ORDER BY state, city_count DESC
+      )
+      SELECT
+        sc.state,
+        sc.total_customers,
+        tc.top_city,
+        ROUND(sc.total_customers * 100.0 / SUM(sc.total_customers) OVER (), 2) AS pct_of_total
+      FROM state_counts sc
+      LEFT JOIN top_cities tc ON sc.state = tc.state
+      ORDER BY sc.total_customers DESC;
+
+  cust_get_seller_geographic_distribution:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get seller count distribution by Brazilian state.
+      Use to assess seller network coverage and identify regions with supply gaps.
+      No parameters required — returns the full seller geographic breakdown.
+      Output fields:
+        - state: Brazilian state code (e.g. SP, RJ, MG)
+        - total_sellers: number of unique sellers registered in this state
+        - top_city: city with the most sellers in this state
+        - pct_of_total: share of all sellers in this state (%)
+    statement: |
+      WITH state_counts AS (
+        SELECT
+          state,
+          COUNT(*) AS total_sellers
+        FROM centralize.dim_user
+        WHERE user_type = 'seller'
+        GROUP BY state
+      ),
+      top_cities AS (
+        SELECT DISTINCT ON (state)
+          state,
+          city AS top_city,
+          COUNT(*) OVER (PARTITION BY state, city) AS city_count
+        FROM centralize.dim_user
+        WHERE user_type = 'seller'
+        ORDER BY state, city_count DESC
+      )
+      SELECT
+        sc.state,
+        sc.total_sellers,
+        tc.top_city,
+        ROUND(sc.total_sellers * 100.0 / SUM(sc.total_sellers) OVER (), 2) AS pct_of_total
+      FROM state_counts sc
+      LEFT JOIN top_cities tc ON sc.state = tc.state
+      ORDER BY sc.total_sellers DESC;

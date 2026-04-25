@@ -335,10 +335,10 @@ tools:
         )
       SELECT
         (SELECT id FROM upload)                 AS request_id,
-        r.status_code                           AS http_status,
+        (r.response).status                     AS http_status,
         CASE
-          WHEN r.status_code BETWEEN 200 AND 299 THEN 'ok'
-          ELSE 'error: ' || left(r.body, 300)
+          WHEN (r.response).status BETWEEN 200 AND 299 THEN 'ok'
+          ELSE 'error: ' || left((r.response).body, 300)
         END                                     AS upload_status,
         'https://nfijbjnazggdnogufwmi.supabase.co/storage/v1/object/public/dashboard/'
           || $1                                 AS public_url,

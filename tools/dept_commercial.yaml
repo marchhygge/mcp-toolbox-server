@@ -1,0 +1,190 @@
+tools:
+
+  comm_get_sales_overview:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get overall sales KPIs for a date range (max 1 year).
+      Primary tool for commercial reporting — revenue, volume, basket size, and freight metrics.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - total_orders: number of unique orders placed
+        - total_items_sold: total quantity of individual items sold
+        - total_revenue: sum of product prices (excluding freight)
+        - total_freight: total freight cost charged to customers
+        - avg_order_value: average product revenue per order
+        - avg_items_per_order: average number of items per order
+        - avg_freight_per_order: average freight cost per order
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        COUNT(DISTINCT order_id)                          AS total_orders,
+        SUM(order_item_id)                                AS total_items_sold,
+        ROUND(SUM(total_price)::numeric, 2)               AS total_revenue,
+        ROUND(SUM(total_freight_value)::numeric, 2)       AS total_freight,
+        ROUND(AVG(total_price)::numeric, 2)               AS avg_order_value,
+        ROUND(AVG(order_item_id)::numeric, 1)             AS avg_items_per_order,
+        ROUND(AVG(total_freight_value)::numeric, 2)       AS avg_freight_per_order
+      FROM centralize.fact_order_item
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'));
+
+  comm_get_sales_trend:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get month-over-month sales trend for a date range (max 1 year).
+      Use for commercial planning, campaign impact analysis, and seasonality tracking.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - year_month: period in YYYY-MM format
+        - total_orders: number of orders in this month
+        - total_items_sold: total items sold
+        - total_revenue: product revenue for the month (excluding freight)
+        - mom_revenue_growth_pct: month-over-month revenue growth percentage (NULL for first month)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      WITH monthly AS (
+        SELECT
+          TO_CHAR(order_date, 'YYYY-MM')             AS year_month,
+          COUNT(DISTINCT order_id)                   AS total_orders,
+          SUM(order_item_id)                         AS total_items_sold,
+          ROUND(SUM(total_price)::numeric, 2)        AS total_revenue
+        FROM centralize.fact_order_item
+        WHERE order_date >= $1::date
+          AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+        GROUP BY TO_CHAR(order_date, 'YYYY-MM')
+      )
+      SELECT
+        year_month,
+        total_orders,
+        total_items_sold,
+        total_revenue,
+        ROUND(
+          (total_revenue - LAG(total_revenue) OVER (ORDER BY year_month))
+          * 100.0 / NULLIF(LAG(total_revenue) OVER (ORDER BY year_month), 0),
+          2
+        ) AS mom_revenue_growth_pct
+      FROM monthly
+      ORDER BY year_month;
+
+  comm_get_top_products:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get top performing products ranked by revenue for a date range (max 1 year).
+      Use for assortment decisions, promotional targeting, and inventory prioritization.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - product_id: unique product identifier
+        - category_name: product category in Portuguese (e.g. cama_mesa_banho, esporte_lazer).
+            Shown as 'unknown' if no category mapping exists
+        - total_orders: number of unique orders containing this product
+        - total_items_sold: total quantity sold
+        - total_revenue: total product revenue (excluding freight)
+        - avg_price_per_item: average unit price
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+      - name: limit
+        type: integer
+        description: Number of top products to return (max 100, recommended 20)
+    statement: |
+      SELECT
+        fi.product_id,
+        COALESCE(p.category_name, 'unknown')          AS category_name,
+        COUNT(DISTINCT fi.order_id)                   AS total_orders,
+        SUM(fi.order_item_id)                         AS total_items_sold,
+        ROUND(SUM(fi.total_price)::numeric, 2)        AS total_revenue,
+        ROUND(AVG(fi.total_price)::numeric, 2)        AS avg_price_per_item
+      FROM centralize.fact_order_item fi
+      LEFT JOIN centralize.dim_product p ON fi.product_id = p.product_id
+      WHERE fi.order_date >= $1::date
+        AND fi.order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      GROUP BY fi.product_id, p.category_name
+      ORDER BY total_revenue DESC
+      LIMIT LEAST($3, 100);
+
+  comm_get_category_performance:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get sales performance by product category for a date range (max 1 year).
+      Use for category management, marketing budget allocation, and range planning.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - category: product category name in Portuguese. Shown as 'unknown' if no mapping
+        - total_orders: number of unique orders with at least one item from this category
+        - total_items_sold: total items sold in this category
+        - total_revenue: product revenue from this category (excluding freight)
+        - avg_price_per_item: average unit selling price in this category
+        - pct_of_revenue: category share of total revenue (%)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        COALESCE(p.category_name, 'unknown')                     AS category,
+        COUNT(DISTINCT fi.order_id)                              AS total_orders,
+        SUM(fi.order_item_id)                                    AS total_items_sold,
+        ROUND(SUM(fi.total_price)::numeric, 2)                   AS total_revenue,
+        ROUND(AVG(fi.total_price)::numeric, 2)                   AS avg_price_per_item,
+        ROUND(SUM(fi.total_price) * 100.0 / SUM(SUM(fi.total_price)) OVER (), 2) AS pct_of_revenue
+      FROM centralize.fact_order_item fi
+      LEFT JOIN centralize.dim_product p ON fi.product_id = p.product_id
+      WHERE fi.order_date >= $1::date
+        AND fi.order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      GROUP BY p.category_name
+      ORDER BY total_revenue DESC;
+
+  comm_get_order_status_funnel:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get order status distribution as a conversion funnel for a date range (max 1 year).
+      Use to track fulfillment health, cancellation rates, and order pipeline efficiency.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - order_status: delivered | shipped | processing | canceled | invoiced | approved | unavailable
+        - total_orders: number of orders in this status
+        - total_revenue: product revenue from orders in this status
+        - pct_of_orders: share of all orders (%)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        fo.order_status,
+        COUNT(DISTINCT fo.order_id)                                        AS total_orders,
+        ROUND(SUM(fi.total_price)::numeric, 2)                             AS total_revenue,
+        ROUND(COUNT(DISTINCT fo.order_id) * 100.0 / SUM(COUNT(DISTINCT fo.order_id)) OVER (), 2) AS pct_of_orders
+      FROM centralize.fact_order fo
+      LEFT JOIN centralize.fact_order_item fi ON fo.order_id = fi.order_id
+      WHERE fo.order_date >= $1::date
+        AND fo.order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      GROUP BY fo.order_status
+      ORDER BY total_orders DESC;
