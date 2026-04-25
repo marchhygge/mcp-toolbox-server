@@ -1,8 +1,4 @@
 toolsets:
-  default:
-    - get_orders_by_date
-    - omt_get_revenue_summary
-
 # OMT (Olist Marketplace Team)
   omt:
     - omt_get_revenue_summary
@@ -12,14 +8,6 @@ toolsets:
     - omt_get_customer_satisfaction
     - omt_get_delivery_performance
     - omt_get_payment_methods
-
-# Department Admin Toolset
-  admin:
-    - admin_get_user_summary
-    - admin_get_ticket_performance
-    - admin_get_staff_ticket_workload
-    - admin_get_dashboard_usage_summary
-    - admin_get_system_activity_summary
 
 # Department BI Toolset
   bi:
@@ -32,3 +20,26 @@ toolsets:
     - bi_get_fact_order_review
     - bi_get_fact_payment
     - bi_upload_dashboard
+
+# Finance Department — access: fact_payment
+  finance:
+    - fin_get_payment_summary
+    - fin_get_payment_trend
+    - fin_get_installment_analysis
+    - fin_get_monthly_revenue
+
+# Customer Department — access: dim_user (customer + seller), fact_order_review, dim_order_review
+  customer:
+    - cust_get_satisfaction_summary
+    - cust_get_review_trend
+    - cust_get_negative_reviews
+    - cust_get_customer_geographic_distribution
+    - cust_get_seller_geographic_distribution
+
+# Commercial Department — access: fact_order, fact_order_item, dim_product
+  commercial:
+    - comm_get_sales_overview
+    - comm_get_sales_trend
+    - comm_get_top_products
+    - comm_get_category_performance
+    - comm_get_order_status_funnel

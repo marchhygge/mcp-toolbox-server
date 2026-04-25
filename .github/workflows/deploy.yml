@@ -18,5 +18,11 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd ${{ secrets.EC2_REPO_PATH }}
+            echo "==> Pulling latest code..."
             git pull origin main
+            echo "==> Restarting containers..."
             sudo docker compose up -d --pull always
+            echo "==> Container status:"
+            sudo docker compose ps
+            echo "==> Recent logs:"
+            sudo docker compose logs --tail=50

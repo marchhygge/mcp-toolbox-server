@@ -1,0 +1,143 @@
+tools:
+
+  fin_get_payment_summary:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get payment collection summary broken down by payment type for a date range (max 1 year).
+      Use for monthly/quarterly financial reporting on revenue collected.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - payment_type: credit_card | boleto | voucher | debit_card
+        - total_orders: number of unique orders using this payment method
+        - total_collected: total BRL collected via this method
+        - avg_installments: average installments chosen (meaningful for credit_card only)
+        - pct_of_revenue: share of total collected revenue (%)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        payment_type,
+        COUNT(DISTINCT order_id)                                                              AS total_orders,
+        ROUND(SUM(total_payment_value)::numeric, 2)                                           AS total_collected,
+        ROUND(AVG(payment_installments)::numeric, 1)                                          AS avg_installments,
+        ROUND(SUM(total_payment_value) * 100.0 / SUM(SUM(total_payment_value)) OVER (), 2)   AS pct_of_revenue
+      FROM centralize.fact_payment
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      GROUP BY payment_type
+      ORDER BY total_collected DESC;
+
+  fin_get_payment_trend:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get daily payment volume trend for a date range (max 1 year).
+      Useful for cash flow analysis, identifying seasonal peaks, and anomaly detection.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - order_date: day of payment
+        - total_orders: number of orders paid on this day
+        - total_collected: total BRL collected on this day
+        - credit_card_collected: amount collected via credit card
+        - boleto_collected: amount collected via boleto
+        - other_collected: amount via voucher + debit_card combined
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        order_date,
+        COUNT(DISTINCT order_id)                                                           AS total_orders,
+        ROUND(SUM(total_payment_value)::numeric, 2)                                        AS total_collected,
+        ROUND(SUM(CASE WHEN payment_type = 'credit_card' THEN total_payment_value ELSE 0 END)::numeric, 2) AS credit_card_collected,
+        ROUND(SUM(CASE WHEN payment_type = 'boleto'      THEN total_payment_value ELSE 0 END)::numeric, 2) AS boleto_collected,
+        ROUND(SUM(CASE WHEN payment_type NOT IN ('credit_card','boleto') THEN total_payment_value ELSE 0 END)::numeric, 2) AS other_collected
+      FROM centralize.fact_payment
+      WHERE order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      GROUP BY order_date
+      ORDER BY order_date;
+
+  fin_get_installment_analysis:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get installment usage breakdown for credit card payments in a date range (max 1 year).
+      Helps the finance team understand deferred revenue exposure and installment preferences.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - payment_installments: number of installments chosen (1 = full payment, 2–12 = split)
+        - total_orders: number of credit card orders with this installment count
+        - total_collected: total BRL from these orders
+        - pct_of_cc_orders: share of all credit card orders (%)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 1 year from date_from
+    statement: |
+      SELECT
+        payment_installments,
+        COUNT(DISTINCT order_id)                                                              AS total_orders,
+        ROUND(SUM(total_payment_value)::numeric, 2)                                           AS total_collected,
+        ROUND(COUNT(DISTINCT order_id) * 100.0 / SUM(COUNT(DISTINCT order_id)) OVER (), 2)   AS pct_of_cc_orders
+      FROM centralize.fact_payment
+      WHERE payment_type = 'credit_card'
+        AND order_date >= $1::date
+        AND order_date <  LEAST($2::date, ($1::date + INTERVAL '1 year'))
+      GROUP BY payment_installments
+      ORDER BY payment_installments;
+
+  fin_get_monthly_revenue:
+    kind: postgres-sql
+    source: olist-db
+    description: >
+      Get month-over-month revenue collection summary for a date range (max 2 years).
+      Use for budget tracking, financial forecasting, and executive reporting.
+      date_from and date_to must be in YYYY-MM-DD format.
+      Output fields:
+        - year_month: period in YYYY-MM format
+        - total_orders: number of orders in this month
+        - total_collected: total BRL collected
+        - mom_growth_pct: month-over-month growth percentage (NULL for first month)
+    parameters:
+      - name: date_from
+        type: string
+        description: Start date inclusive (YYYY-MM-DD)
+      - name: date_to
+        type: string
+        description: End date inclusive (YYYY-MM-DD), max 2 years from date_from
+    statement: |
+      WITH monthly AS (
+        SELECT
+          TO_CHAR(order_date, 'YYYY-MM')           AS year_month,
+          COUNT(DISTINCT order_id)                 AS total_orders,
+          ROUND(SUM(total_payment_value)::numeric, 2) AS total_collected
+        FROM centralize.fact_payment
+        WHERE order_date >= $1::date
+          AND order_date <  LEAST($2::date, ($1::date + INTERVAL '2 years'))
+        GROUP BY TO_CHAR(order_date, 'YYYY-MM')
+      )
+      SELECT
+        year_month,
+        total_orders,
+        total_collected,
+        ROUND(
+          (total_collected - LAG(total_collected) OVER (ORDER BY year_month))
+          * 100.0 / NULLIF(LAG(total_collected) OVER (ORDER BY year_month), 0),
+          2
+        ) AS mom_growth_pct
+      FROM monthly
+      ORDER BY year_month;

@@ -89,10 +89,12 @@ def _execute(engine, query: str):
     from sqlalchemy import text
 
     with engine.connect() as conn:
+        conn.execute(text("SET statement_timeout = 0"))
         result = conn.execute(text(query))
         if result.returns_rows:
             columns = list(result.keys())
             rows = result.fetchall()
+            conn.commit()
             return columns, rows
         conn.commit()
         return [], []
